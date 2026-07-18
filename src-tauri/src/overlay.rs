@@ -1,6 +1,6 @@
 use crate::settings;
 use crate::settings::OverlayPosition;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(not(target_os = "macos"))]
 use log::debug;
@@ -140,27 +140,6 @@ fn force_overlay_topmost(overlay_window: &tauri::webview::WebviewWindow) {
 
 fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
     app_handle.primary_monitor().ok().flatten()
-}
-
-fn is_mouse_within_monitor(
-    mouse_pos: (i32, i32),
-    monitor_pos: &PhysicalPosition<i32>,
-    monitor_size: &PhysicalSize<u32>,
-) -> bool {
-    let (mouse_x, mouse_y) = mouse_pos;
-    let PhysicalPosition {
-        x: monitor_x,
-        y: monitor_y,
-    } = *monitor_pos;
-    let PhysicalSize {
-        width: monitor_width,
-        height: monitor_height,
-    } = *monitor_size;
-
-    mouse_x >= monitor_x
-        && mouse_x < (monitor_x + monitor_width as i32)
-        && mouse_y >= monitor_y
-        && mouse_y < (monitor_y + monitor_height as i32)
 }
 
 /// Returns overlay position in logical coordinates (points on macOS).

@@ -1,30 +1,9 @@
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
-use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
-use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error};
-use crate::managers::audio::AudioRecordingManager;
-use crate::managers::history::HistoryManager;
-use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID};
-// use crate::shortcut;
-use crate::tray::{change_tray_icon, TrayIconState};
-use crate::utils::{
-    self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
-};
 use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use log::{debug, error, warn};
-use once_cell::sync::Lazy;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
-use tauri::Manager;
-use tauri::{AppHandle, Emitter};
-
-#[derive(Clone, serde::Serialize)]
-struct RecordingErrorEvent {
-    error_type: String,
-    detail: Option<String>,
-}
+use tauri::AppHandle;
 
 /// Field name for structured output JSON schema
 const TRANSCRIPTION_FIELD: &str = "transcription";

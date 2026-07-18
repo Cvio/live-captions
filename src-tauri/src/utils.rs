@@ -5,7 +5,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
 // Re-export all utility modules for easy access
-// pub use crate::audio_feedback::*;
 pub use crate::overlay::*;
 pub use crate::tray::*;
 
@@ -16,7 +15,6 @@ pub fn cancel_current_operation(app: &AppHandle) {
 
     // Cancel any ongoing recording
     let audio_manager = app.state::<Arc<AudioRecordingManager>>();
-    let recording_was_active = audio_manager.is_recording();
     audio_manager.cancel_recording();
 
     // Update tray icon and hide overlay

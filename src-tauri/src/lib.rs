@@ -1,7 +1,6 @@
 mod actions;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
-mod audio_feedback;
 pub mod audio_toolkit;
 pub mod cli;
 mod commands;
@@ -321,7 +320,6 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::get_available_output_devices,
             commands::audio::set_selected_output_device,
             commands::audio::get_selected_output_device,
-            commands::audio::play_test_sound,
             commands::audio::check_custom_sounds,
             commands::audio::set_clamshell_microphone,
             commands::audio::get_clamshell_microphone,
@@ -391,7 +389,7 @@ pub fn run(cli_args: CliArgs) {
     }
 
     builder
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_fs::init())

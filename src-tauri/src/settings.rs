@@ -934,20 +934,6 @@ pub fn write_settings(app: &AppHandle, settings: AppSettings) {
     store.set("settings", serde_json::to_value(&settings).unwrap());
 }
 
-pub fn get_bindings(app: &AppHandle) -> HashMap<String, ShortcutBinding> {
-    let settings = get_settings(app);
-
-    settings.bindings
-}
-
-pub fn get_stored_binding(app: &AppHandle, id: &str) -> ShortcutBinding {
-    let bindings = get_bindings(app);
-
-    let binding = bindings.get(id).unwrap().clone();
-
-    binding
-}
-
 pub fn get_history_limit(app: &AppHandle) -> usize {
     let settings = get_settings(app);
     settings.history_limit
