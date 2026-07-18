@@ -13,9 +13,6 @@ mod managers;
 mod overlay;
 pub mod portable;
 mod settings;
-mod shortcut;
-mod signal_handle;
-mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
 mod tts;
@@ -25,7 +22,6 @@ pub use cli::CliArgs;
 #[cfg(debug_assertions)]
 use specta_typescript::{BigIntExportBehavior, Typescript};
 use tauri_specta::{collect_commands, collect_events, Builder};
-
 use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
@@ -38,8 +34,6 @@ use signal_hook::iterator::Signals;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::image::Image;
-pub use transcription_coordinator::TranscriptionCoordinator;
-
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Listener, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -165,17 +159,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
-
-    // Note: Shortcuts are NOT initialized here.
-    // The frontend is responsible for calling the `initialize_shortcuts` command
-    // after permissions are confirmed (on macOS) or after onboarding completes.
-    // This matches the pattern used for Enigo initialization.
-
-    #[cfg(unix)]
-    let signals = Signals::new(&[SIGUSR1, SIGUSR2]).unwrap();
-    // Set up signal handlers for toggling transcription
-    #[cfg(unix)]
-    signal_handle::setup_signal_handler(app_handle.clone(), signals);
 
     // Apply macOS Accessory policy if starting hidden and tray is available.
     // If the tray icon is disabled, keep the dock icon so the user can reopen.
@@ -306,58 +289,6 @@ pub fn run(cli_args: CliArgs) {
 
     let specta_builder = Builder::<tauri::Wry>::new()
         .commands(collect_commands![
-            shortcut::change_binding,
-            shortcut::reset_binding,
-            shortcut::change_ptt_setting,
-            shortcut::change_audio_feedback_setting,
-            shortcut::change_audio_feedback_volume_setting,
-            shortcut::change_sound_theme_setting,
-            shortcut::change_start_hidden_setting,
-            shortcut::change_autostart_setting,
-            shortcut::change_translate_to_english_setting,
-            shortcut::change_selected_language_setting,
-            shortcut::change_overlay_position_setting,
-            shortcut::change_debug_mode_setting,
-            shortcut::change_word_correction_threshold_setting,
-            shortcut::change_extra_recording_buffer_setting,
-            shortcut::change_paste_delay_ms_setting,
-            shortcut::change_paste_method_setting,
-            shortcut::get_available_typing_tools,
-            shortcut::change_typing_tool_setting,
-            shortcut::change_external_script_path_setting,
-            shortcut::change_clipboard_handling_setting,
-            shortcut::change_auto_submit_setting,
-            shortcut::change_auto_submit_key_setting,
-            shortcut::change_post_process_enabled_setting,
-            shortcut::change_experimental_enabled_setting,
-            shortcut::change_post_process_base_url_setting,
-            shortcut::change_post_process_api_key_setting,
-            shortcut::change_post_process_model_setting,
-            shortcut::set_post_process_provider,
-            shortcut::fetch_post_process_models,
-            shortcut::add_post_process_prompt,
-            shortcut::update_post_process_prompt,
-            shortcut::delete_post_process_prompt,
-            shortcut::set_post_process_selected_prompt,
-            shortcut::update_custom_words,
-            shortcut::suspend_binding,
-            shortcut::resume_binding,
-            shortcut::change_mute_while_recording_setting,
-            shortcut::change_append_trailing_space_setting,
-            shortcut::change_speak_aloud_setting,
-            shortcut::change_tts_endpoint_setting,
-            shortcut::change_tts_language_setting,
-            shortcut::change_lazy_stream_close_setting,
-            shortcut::change_app_language_setting,
-            shortcut::change_keyboard_implementation_setting,
-            shortcut::get_keyboard_implementation,
-            shortcut::change_show_tray_icon_setting,
-            shortcut::change_whisper_accelerator_setting,
-            shortcut::change_ort_accelerator_setting,
-            shortcut::change_whisper_gpu_device,
-            shortcut::get_available_accelerators,
-            shortcut::handy_keys::start_handy_keys_recording,
-            shortcut::handy_keys::stop_handy_keys_recording,
             show_main_window_command,
             commands::cancel_operation,
             commands::is_portable,
@@ -408,7 +339,7 @@ pub fn run(cli_args: CliArgs) {
             commands::history::retry_history_entry_transcription,
             commands::history::update_history_limit,
             commands::history::update_recording_retention_period,
-            helpers::clamshell::is_laptop,
+            // helpers::clamshell::is_laptop,
         ])
         .events(collect_events![managers::history::HistoryUpdatePayload,]);
 
@@ -464,15 +395,7 @@ pub fn run(cli_args: CliArgs) {
 
     builder
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if args.iter().any(|a| a == "--toggle-transcription") {
-                signal_handle::send_transcription_input(app, "transcribe", "CLI");
-            } else if args.iter().any(|a| a == "--toggle-post-process") {
-                signal_handle::send_transcription_input(app, "transcribe_with_post_process", "CLI");
-            } else if args.iter().any(|a| a == "--cancel") {
-                crate::utils::cancel_current_operation(app);
-            } else {
-                show_main_window(app);
-            }
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
@@ -519,7 +442,6 @@ pub fn run(cli_args: CliArgs) {
             // Store the file log level in the atomic for the filter to use
             FILE_LOG_LEVEL.store(file_log_level.to_level_filter() as u8, Ordering::Relaxed);
             let app_handle = app.handle().clone();
-            app.manage(TranscriptionCoordinator::new(app_handle.clone()));
 
             initialize_core_logic(&app_handle);
 
