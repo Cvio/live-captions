@@ -188,7 +188,10 @@ impl AudioRecordingManager {
 
     /* ---------- helper methods --------------------------------------------- */
 
-    fn get_effective_microphone_device(&self, settings: &AppSettings) -> Option<cpal::Device> {
+    pub(crate) fn get_effective_microphone_device(
+        &self,
+        settings: &AppSettings,
+    ) -> Option<cpal::Device> {
         // Check if we're in clamshell mode and have a clamshell microphone configured
         let use_clamshell_mic = if let Ok(is_clamshell) = clamshell::is_clamshell() {
             is_clamshell && settings.clamshell_microphone.is_some()

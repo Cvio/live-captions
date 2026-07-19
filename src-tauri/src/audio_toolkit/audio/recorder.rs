@@ -25,9 +25,66 @@ enum Cmd {
     Shutdown,
 }
 
-enum AudioChunk {
+pub(crate) enum AudioChunk {
     Samples(Vec<f32>),
     EndOfStream,
+}
+
+/// Open a cpal input stream on `device`, sending mono f32 chunks at the
+/// device's native sample rate into `sample_tx`. Returns the live stream
+/// (must stay on the calling thread; cpal streams are !Send) and the
+/// stream's sample rate. When `stop_flag` is set the callback sends one
+/// `AudioChunk::EndOfStream` and goes quiet.
+pub(crate) fn open_capture_stream(
+    device: &cpal::Device,
+    sample_tx: mpsc::Sender<AudioChunk>,
+    stop_flag: Arc<AtomicBool>,
+) -> Result<(cpal::Stream, u32), String> {
+    let config = AudioRecorder::get_preferred_config(device)
+        .map_err(|e| format!("Failed to fetch preferred config: {e}"))?;
+
+    let sample_rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+
+    log::info!(
+        "Using device: {:?}\nSample rate: {}\nChannels: {}\nFormat: {:?}",
+        device.name(),
+        sample_rate,
+        channels,
+        config.sample_format()
+    );
+
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::U8 => {
+            AudioRecorder::build_stream::<u8>(device, &config, sample_tx, channels, stop_flag)
+                .map_err(|e| format!("Failed to build input stream: {e}"))?
+        }
+        cpal::SampleFormat::I8 => {
+            AudioRecorder::build_stream::<i8>(device, &config, sample_tx, channels, stop_flag)
+                .map_err(|e| format!("Failed to build input stream: {e}"))?
+        }
+        cpal::SampleFormat::I16 => {
+            AudioRecorder::build_stream::<i16>(device, &config, sample_tx, channels, stop_flag)
+                .map_err(|e| format!("Failed to build input stream: {e}"))?
+        }
+        cpal::SampleFormat::I32 => {
+            AudioRecorder::build_stream::<i32>(device, &config, sample_tx, channels, stop_flag)
+                .map_err(|e| format!("Failed to build input stream: {e}"))?
+        }
+        cpal::SampleFormat::F32 => {
+            AudioRecorder::build_stream::<f32>(device, &config, sample_tx, channels, stop_flag)
+                .map_err(|e| format!("Failed to build input stream: {e}"))?
+        }
+        sample_format => {
+            return Err(format!("Unsupported sample format: {sample_format:?}"));
+        }
+    };
+
+    stream
+        .play()
+        .map_err(|e| format!("Failed to start microphone stream: {e}"))?;
+
+    Ok((stream, sample_rate))
 }
 
 pub struct AudioRecorder {
@@ -87,73 +144,7 @@ impl AudioRecorder {
         let worker = std::thread::spawn(move || {
             let stop_flag = Arc::new(AtomicBool::new(false));
             let stop_flag_for_stream = stop_flag.clone();
-            let init_result = (|| -> Result<(cpal::Stream, u32), String> {
-                let config = AudioRecorder::get_preferred_config(&thread_device)
-                    .map_err(|e| format!("Failed to fetch preferred config: {e}"))?;
-
-                let sample_rate = config.sample_rate().0;
-                let channels = config.channels() as usize;
-
-                log::info!(
-                    "Using device: {:?}\nSample rate: {}\nChannels: {}\nFormat: {:?}",
-                    thread_device.name(),
-                    sample_rate,
-                    channels,
-                    config.sample_format()
-                );
-
-                let stream = match config.sample_format() {
-                    cpal::SampleFormat::U8 => AudioRecorder::build_stream::<u8>(
-                        &thread_device,
-                        &config,
-                        sample_tx,
-                        channels,
-                        stop_flag_for_stream,
-                    )
-                    .map_err(|e| format!("Failed to build input stream: {e}"))?,
-                    cpal::SampleFormat::I8 => AudioRecorder::build_stream::<i8>(
-                        &thread_device,
-                        &config,
-                        sample_tx,
-                        channels,
-                        stop_flag_for_stream,
-                    )
-                    .map_err(|e| format!("Failed to build input stream: {e}"))?,
-                    cpal::SampleFormat::I16 => AudioRecorder::build_stream::<i16>(
-                        &thread_device,
-                        &config,
-                        sample_tx,
-                        channels,
-                        stop_flag_for_stream,
-                    )
-                    .map_err(|e| format!("Failed to build input stream: {e}"))?,
-                    cpal::SampleFormat::I32 => AudioRecorder::build_stream::<i32>(
-                        &thread_device,
-                        &config,
-                        sample_tx,
-                        channels,
-                        stop_flag_for_stream,
-                    )
-                    .map_err(|e| format!("Failed to build input stream: {e}"))?,
-                    cpal::SampleFormat::F32 => AudioRecorder::build_stream::<f32>(
-                        &thread_device,
-                        &config,
-                        sample_tx,
-                        channels,
-                        stop_flag_for_stream,
-                    )
-                    .map_err(|e| format!("Failed to build input stream: {e}"))?,
-                    sample_format => {
-                        return Err(format!("Unsupported sample format: {sample_format:?}"));
-                    }
-                };
-
-                stream
-                    .play()
-                    .map_err(|e| format!("Failed to start microphone stream: {e}"))?;
-
-                Ok((stream, sample_rate))
-            })();
+            let init_result = open_capture_stream(&thread_device, sample_tx, stop_flag_for_stream);
 
             match init_result {
                 Ok((stream, sample_rate)) => {
