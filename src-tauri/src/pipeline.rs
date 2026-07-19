@@ -22,6 +22,7 @@ use crate::audio_toolkit::audio::{open_capture_stream, AudioChunk, FrameResample
 use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 use crate::audio_toolkit::vad::{SileroVad, SmoothedVad, VadFrame, VoiceActivityDetector};
 use crate::managers::audio::AudioRecordingManager;
+use crate::managers::transcription::TranscriptionManager;
 use crate::settings::get_settings;
 
 /// Duration of one AudioFrame. Matches the Silero VAD frame size.
@@ -271,6 +272,52 @@ pub fn spawn_vad(
         }
 
         info!("VAD stage stopped");
+    })
+}
+
+/// Transcription stage (A4): run each SpeechSegment through the existing
+/// TranscriptionManager. Empty transcriptions are dropped silently; errors
+/// are logged and the segment discarded so the pipeline keeps flowing.
+/// The caller is responsible for initiating the model load before start.
+pub fn spawn_transcribe(
+    transcription_manager: Arc<TranscriptionManager>,
+    segment_rx: Receiver<SpeechSegment>,
+    transcript_tx: Sender<Transcript>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        info!("Transcription stage started");
+
+        while let Ok(seg) = segment_rx.recv() {
+            let segment_ms = seg.samples.len() as u64 * 1000 / WHISPER_SAMPLE_RATE as u64;
+            let st = std::time::Instant::now();
+            match transcription_manager.transcribe(seg.samples) {
+                Ok(text) => {
+                    debug!(
+                        "Transcription stage: {} ms segment transcribed in {} ms",
+                        segment_ms,
+                        st.elapsed().as_millis()
+                    );
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if transcript_tx
+                        .send(Transcript {
+                            text,
+                            start_ms: seg.start_ms,
+                            end_ms: seg.end_ms,
+                        })
+                        .is_err()
+                    {
+                        break; // downstream hung up
+                    }
+                }
+                Err(e) => {
+                    error!("Transcription stage: transcribe failed: {e}");
+                }
+            }
+        }
+
+        info!("Transcription stage stopped");
     })
 }
 
