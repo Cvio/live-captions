@@ -8,6 +8,7 @@ mod helpers;
 mod llm_client;
 mod managers;
 mod overlay;
+pub mod pipeline;
 pub mod portable;
 mod settings;
 mod tray;
