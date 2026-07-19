@@ -8,6 +8,7 @@
     "cancel": "Cancel"
   },
   "sidebar": {
+    "captions": "Captions",
     "general": "General",
     "models": "Models",
     "advanced": "Advanced",

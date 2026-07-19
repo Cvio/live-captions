@@ -8,7 +8,9 @@ import {
   Sparkles,
   Cpu,
   Mic,
+  Captions,
 } from "lucide-react";
+import { CaptionsView } from "./captions/CaptionsView";
 import AppWordmark from "./icons/AppWordmark";
 import { useSettings } from "../hooks/useSettings";
 import {
@@ -39,6 +41,12 @@ interface SectionConfig {
 }
 
 export const SECTIONS_CONFIG = {
+  captions: {
+    labelKey: "sidebar.captions",
+    icon: Captions,
+    component: CaptionsView,
+    enabled: () => true,
+  },
   general: {
     labelKey: "sidebar.general",
     icon: Mic,
