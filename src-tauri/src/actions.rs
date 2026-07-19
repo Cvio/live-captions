@@ -9,7 +9,7 @@ use tauri::AppHandle;
 const TRANSCRIPTION_FIELD: &str = "transcription";
 
 /// Strip invisible Unicode characters that some LLMs may insert
-fn strip_invisible_chars(s: &str) -> String {
+pub(crate) fn strip_invisible_chars(s: &str) -> String {
     s.replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}'], "")
 }
 

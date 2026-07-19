@@ -23,7 +23,8 @@ use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 use crate::audio_toolkit::vad::{SileroVad, SmoothedVad, VadFrame, VoiceActivityDetector};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::transcription::TranscriptionManager;
-use crate::settings::get_settings;
+use crate::llm_client;
+use crate::settings::{get_settings, PostProcessProvider};
 
 /// Duration of one AudioFrame. Matches the Silero VAD frame size.
 const FRAME_MS: u64 = 30;
@@ -318,6 +319,90 @@ pub fn spawn_transcribe(
         }
 
         info!("Transcription stage stopped");
+    })
+}
+
+/// Translation stage (A5) endpoint: local Ollama, OpenAI-compatible.
+const TRANSLATE_BASE_URL: &str = "http://localhost:11434/v1";
+const TRANSLATE_MODEL: &str = "qwen3:8b";
+const TRANSLATE_SYSTEM_PROMPT: &str = "You are a translator. Translate the user's Spanish text \
+to natural English. Output only the translation, nothing else.";
+/// Placeholder shown when the translation request fails; the pipeline never stalls.
+const TRANSLATION_FAILED: &str = "[translation failed]";
+
+/// Translation stage (A5): translate each Transcript es->en via the existing
+/// llm_client against local Ollama. llm_client is async, so requests are
+/// bridged with tauri::async_runtime::block_on inside this thread.
+pub fn spawn_translate(
+    transcript_rx: Receiver<Transcript>,
+    caption_tx: Sender<Caption>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let provider = PostProcessProvider {
+            id: "custom".to_string(),
+            label: "Ollama (captions)".to_string(),
+            base_url: TRANSLATE_BASE_URL.to_string(),
+            allow_base_url_edit: false,
+            models_endpoint: None,
+            supports_structured_output: false,
+        };
+
+        info!("Translation stage started");
+
+        while let Ok(transcript) = transcript_rx.recv() {
+            let st = std::time::Instant::now();
+            let result = tauri::async_runtime::block_on(llm_client::send_chat_completion_with_schema(
+                &provider,
+                String::new(), // no API key for local Ollama
+                TRANSLATE_MODEL,
+                transcript.text.clone(),
+                Some(TRANSLATE_SYSTEM_PROMPT.to_string()),
+                None,
+                Some("none".to_string()),
+                None,
+            ));
+
+            let translated = match result {
+                Ok(Some(content)) => {
+                    let cleaned = crate::actions::strip_invisible_chars(&content)
+                        .trim()
+                        .to_string();
+                    if cleaned.is_empty() {
+                        error!("Translation stage: empty translation response");
+                        TRANSLATION_FAILED.to_string()
+                    } else {
+                        cleaned
+                    }
+                }
+                Ok(None) => {
+                    error!("Translation stage: response had no content");
+                    TRANSLATION_FAILED.to_string()
+                }
+                Err(e) => {
+                    error!("Translation stage: request failed: {e}");
+                    TRANSLATION_FAILED.to_string()
+                }
+            };
+
+            debug!(
+                "Translation stage: translated in {} ms",
+                st.elapsed().as_millis()
+            );
+
+            if caption_tx
+                .send(Caption {
+                    original: transcript.text,
+                    translated,
+                    start_ms: transcript.start_ms,
+                    end_ms: transcript.end_ms,
+                })
+                .is_err()
+            {
+                break; // downstream hung up
+            }
+        }
+
+        info!("Translation stage stopped");
     })
 }
 
