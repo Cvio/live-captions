@@ -15,11 +15,12 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use cpal::traits::HostTrait;
-use log::{error, info};
+use log::{debug, error, info};
 use tauri::Manager;
 
 use crate::audio_toolkit::audio::{open_capture_stream, AudioChunk, FrameResampler};
 use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
+use crate::audio_toolkit::vad::{SileroVad, SmoothedVad, VadFrame, VoiceActivityDetector};
 use crate::managers::audio::AudioRecordingManager;
 use crate::settings::get_settings;
 
@@ -27,6 +28,20 @@ use crate::settings::get_settings;
 const FRAME_MS: u64 = 30;
 /// How often the capture loop wakes up to check the stop flag while idle.
 const CAPTURE_POLL: Duration = Duration::from_millis(100);
+
+/// VAD segmentation tunables (A3).
+/// Silence run that ends an utterance.
+const SILENCE_END_MS: u64 = 500;
+/// Utterances with less accumulated speech than this are dropped as noise.
+const MIN_SPEECH_MS: u64 = 300;
+/// Pre-roll kept from before speech onset (frames of 30 ms; 7 ~= 210 ms).
+const PRE_ROLL_FRAMES: usize = 7;
+/// Short VAD dropouts bridged inside an utterance (frames; 5 ~= 150 ms).
+const HANGOVER_FRAMES: usize = 5;
+/// Consecutive voiced frames required to trigger speech onset.
+const ONSET_FRAMES: usize = 2;
+/// Silero speech probability threshold (matches the recording path).
+const VAD_THRESHOLD: f32 = 0.3;
 
 /// A short frame of raw audio from the capture stream (already mono f32,
 /// 16 kHz). Small and frequent: the capture thread sends these continuously
@@ -158,6 +173,104 @@ pub fn spawn_capture(
 
         drop(stream); // releases the audio device
         info!("Capture stage stopped");
+    })
+}
+
+/// VAD segmentation stage (A3): feed frames through the smoothed Silero VAD,
+/// accumulate voiced audio, and emit one SpeechSegment per utterance once
+/// silence has lasted >= SILENCE_END_MS. The SmoothedVad supplies onset
+/// smoothing, a ~210 ms pre-roll at speech onset, and bridges short
+/// dropouts; the >= 500 ms end-of-utterance silence is counted here.
+pub fn spawn_vad(
+    vad_model_path: std::path::PathBuf,
+    frame_rx: Receiver<AudioFrame>,
+    segment_tx: Sender<SpeechSegment>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let silero = match SileroVad::new(&vad_model_path, VAD_THRESHOLD) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("VAD stage: failed to create SileroVad: {e}");
+                return;
+            }
+        };
+        let mut vad = SmoothedVad::new(
+            Box::new(silero),
+            PRE_ROLL_FRAMES,
+            HANGOVER_FRAMES,
+            ONSET_FRAMES,
+        );
+
+        // Current utterance being accumulated, if any.
+        let mut segment: Vec<f32> = Vec::new();
+        let mut in_segment = false;
+        let mut start_ms: u64 = 0;
+        let mut speech_ms: u64 = 0;
+        let mut silence_run_ms: u64 = 0;
+
+        info!("VAD stage started");
+
+        // Loop ends when the capture stage drops frame_tx.
+        while let Ok(frame) = frame_rx.recv() {
+            match vad.push_frame(&frame.samples) {
+                Ok(VadFrame::Speech(buf)) => {
+                    if !in_segment {
+                        in_segment = true;
+                        segment.clear();
+                        speech_ms = 0;
+                        // buf holds pre-roll + current frame; the utterance
+                        // started that far before this frame's timestamp.
+                        let buf_ms = buf.len() as u64 * 1000 / WHISPER_SAMPLE_RATE as u64;
+                        start_ms = frame
+                            .timestamp_ms
+                            .saturating_sub(buf_ms.saturating_sub(FRAME_MS));
+                    }
+                    segment.extend_from_slice(buf);
+                    speech_ms += FRAME_MS;
+                    silence_run_ms = 0;
+                }
+                Ok(VadFrame::Noise) => {
+                    if !in_segment {
+                        continue;
+                    }
+                    // Keep the natural pause inside the utterance buffer.
+                    segment.extend_from_slice(&frame.samples);
+                    silence_run_ms += FRAME_MS;
+                    if silence_run_ms >= SILENCE_END_MS {
+                        let end_ms = frame.timestamp_ms + FRAME_MS;
+                        if speech_ms >= MIN_SPEECH_MS {
+                            debug!(
+                                "VAD stage: utterance {}..{} ms ({} ms speech)",
+                                start_ms, end_ms, speech_ms
+                            );
+                            if segment_tx
+                                .send(SpeechSegment {
+                                    samples: std::mem::take(&mut segment),
+                                    start_ms,
+                                    end_ms,
+                                })
+                                .is_err()
+                            {
+                                break; // downstream hung up
+                            }
+                        } else {
+                            debug!(
+                                "VAD stage: dropped {} ms of speech as noise",
+                                speech_ms
+                            );
+                            segment.clear();
+                        }
+                        in_segment = false;
+                        silence_run_ms = 0;
+                    }
+                }
+                Err(e) => {
+                    error!("VAD stage: push_frame failed: {e}");
+                }
+            }
+        }
+
+        info!("VAD stage stopped");
     })
 }
 
