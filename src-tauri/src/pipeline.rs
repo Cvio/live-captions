@@ -426,6 +426,12 @@ fn spawn_emit(app: tauri::AppHandle, caption_rx: Receiver<Caption>) -> JoinHandl
     std::thread::spawn(move || {
         info!("Emit stage started");
         while let Ok(caption) = caption_rx.recv() {
+            // One line per caption for terminal smoke tests without the UI
+            // (visible with debug logging enabled, e.g. --debug or RUST_LOG).
+            debug!(
+                "caption [{}..{} ms] es: {:?} en: {:?}",
+                caption.start_ms, caption.end_ms, caption.original, caption.translated
+            );
             if let Err(e) = app.emit("caption", &caption) {
                 error!("Emit stage: failed to emit caption event: {e}");
             }
