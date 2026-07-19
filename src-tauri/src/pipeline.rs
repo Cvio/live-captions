@@ -10,13 +10,13 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use cpal::traits::HostTrait;
 use log::{debug, error, info};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::audio_toolkit::audio::{open_capture_stream, AudioChunk, FrameResampler};
 use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
@@ -404,6 +404,93 @@ pub fn spawn_translate(
 
         info!("Translation stage stopped");
     })
+}
+
+/// How long stop_captions waits for the stage threads to wind down before
+/// giving up and letting them finish detached.
+const STOP_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A running pipeline: the shared stop flag plus every stage thread.
+pub struct PipelineHandle {
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+/// Tauri managed state holding the running pipeline, if any.
+#[derive(Default)]
+pub struct PipelineState(pub Mutex<Option<PipelineHandle>>);
+
+/// Emit stage (A6): forward each finished Caption to the frontend as the
+/// Tauri event "caption". Exits when the translation stage drops caption_tx.
+fn spawn_emit(app: tauri::AppHandle, caption_rx: Receiver<Caption>) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        info!("Emit stage started");
+        while let Ok(caption) = caption_rx.recv() {
+            if let Err(e) = app.emit("caption", &caption) {
+                error!("Emit stage: failed to emit caption event: {e}");
+            }
+        }
+        info!("Emit stage stopped");
+    })
+}
+
+/// Build channels, spawn stages A2-A5 plus the emit thread, and return the
+/// handle. Assumes the caller has checked that no pipeline is running.
+pub fn start(app: &tauri::AppHandle) -> Result<PipelineHandle, String> {
+    // Kick off the transcription model load now (no-op if already loaded);
+    // the transcribe stage waits on the load before its first segment.
+    app.state::<Arc<TranscriptionManager>>().initiate_model_load();
+
+    let vad_model_path = app
+        .path()
+        .resolve(
+            "resources/models/silero_vad_v4.onnx",
+            tauri::path::BaseDirectory::Resource,
+        )
+        .map_err(|e| format!("Failed to resolve VAD model path: {e}"))?;
+
+    let channels = PipelineChannels::new();
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let threads = vec![
+        spawn_capture(app, channels.frame_tx, stop.clone()),
+        spawn_vad(vad_model_path, channels.frame_rx, channels.segment_tx),
+        spawn_transcribe(
+            app.state::<Arc<TranscriptionManager>>().inner().clone(),
+            channels.segment_rx,
+            channels.transcript_tx,
+        ),
+        spawn_translate(channels.transcript_rx, channels.caption_tx),
+        spawn_emit(app.clone(), channels.caption_rx),
+    ];
+
+    // The unused receiver/sender ends of `channels` were moved into the
+    // stages above; nothing is left holding a duplicate sender, so each
+    // recv loop ends when its upstream stage exits.
+    Ok(PipelineHandle { stop, threads })
+}
+
+/// Signal the pipeline to stop and wait (bounded) for the threads to exit.
+/// The capture thread notices the flag, drops its stream (releasing the
+/// device) and its sender; the shutdown then cascades stage to stage.
+pub fn stop(handle: PipelineHandle) {
+    handle.stop.store(true, Ordering::Relaxed);
+
+    let (done_tx, done_rx) = channel::<()>();
+    std::thread::spawn(move || {
+        for t in handle.threads {
+            let _ = t.join();
+        }
+        let _ = done_tx.send(());
+    });
+
+    match done_rx.recv_timeout(STOP_JOIN_TIMEOUT) {
+        Ok(()) => info!("Caption pipeline stopped"),
+        Err(_) => log::warn!(
+            "Caption pipeline threads still finishing after {:?}; detaching",
+            STOP_JOIN_TIMEOUT
+        ),
+    }
 }
 
 impl PipelineChannels {
