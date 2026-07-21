@@ -65,6 +65,13 @@ export const CaptionsView: React.FC = () => {
         <Button variant="secondary" onClick={handleStop} disabled={!running}>
           {t("captions.stop", { defaultValue: "Stop" })}
         </Button>
+        <Button
+          variant="secondary"
+          onClick={() => setCaptions([])}
+          disabled={captions.length === 0}
+        >
+          {t("captions.clear", { defaultValue: "Clear" })}
+        </Button>
         {running && (
           <span className="text-sm text-mid-gray">
             {t("captions.listening", { defaultValue: "Listening…" })}

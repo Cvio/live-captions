@@ -59,10 +59,7 @@ function App() {
   useEffect(() => {
     if (onboardingStep === "done" && !hasCompletedPostOnboardingInit.current) {
       hasCompletedPostOnboardingInit.current = true;
-      Promise.all([
-        commands.initializeEnigo(),
-        commands.initializeShortcuts(),
-      ]).catch((e) => {
+      Promise.all([commands.initializeShortcuts()]).catch((e) => {
         console.warn("Failed to initialize:", e);
       });
       refreshAudioDevices();
